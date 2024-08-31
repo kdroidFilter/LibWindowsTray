@@ -4,7 +4,9 @@
 
 ![Windows screenshot](./screenshot_windows.png)
 
-![Linux screenshot](./screenshot_linux.png)
+![GNOME screenshot](./screenshot_gnome.png)
+
+![KDE screenshot](./screenshot_kde.png)
 
 Cross-platform, super tiny[^1] C99-based implementation of a system tray/menu bar icon with popup menu.
 
