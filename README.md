@@ -1,58 +1,33 @@
-# System Tray / Menu Bar / Indicator Icon
+# 🖥️ ComposeNativeTray - Windows Tray Backend
 
-![MacOS screenshot](./screenshot_macosx.png)
+This repository contains a minimal, Windows-only C backend for displaying a system tray icon. It is designed for use with the [ComposeNativeTray](https://github.com/kdroidFilter/ComposeNativeTray) library, providing tray integration for Windows applications built with Kotlin and JetBrains Compose.
 
-![Windows screenshot](./screenshot_windows.png)
+## 🎯 Purpose
 
-![GNOME screenshot](./screenshot_gnome.png)
+* ✅ Focused only on **Windows** (all other platform code has been removed)
+* 🧼 Cleaned up to remove unnecessary files and platform-specific implementations
+* ➕ Added support for **tray icon position detection** to help with custom context menu placement
+* 🔗 JNI-friendly API for seamless integration with Kotlin/Compose
 
-![KDE screenshot](./screenshot_kde.png)
+## ✅ Features
 
-Cross-platform, super tiny[^1] C99-based implementation of a system tray/menu bar icon with popup menu.
+* Add a system tray icon with a tooltip
+* Support for left-click callback (optional)
+* Customizable context menu:
 
-[^1]: It's super tiny on both Mac & Windows.
+ * ✔️ Checkable items
+ * 🚫 Disabled (grayed-out) items
+ * ➕ Submenus
+* Dynamic updates of the menu and tooltip at runtime
+* **Tray icon screen position detection** for UI alignment
 
-The optional primary-click callback can hide/show a window while secondary-click shows a menu, or if  
-no callback is specified, either click will show the menu.  The system can be dynamically 
-updated; icon, tooltip, menu item text and status (checked/unchecked & enabled/disabled) can all be 
-both queried and changed at runtime. 
-
-Code is C++ friendly and will compile fine in C99 or C++98 and up on Windows, Objective-C on Mac but C++20 on Linux.
-
-Focussed PRs are welcome, especially improvements to the Linux implementation.  The goal is to 
-keep the code as simple as possible, so functionality beyond presenting a tray icon and menu is 
-out of scope.
-
-## Cross-platform
-
-Works well on:
-
-* Windows XP or newer (shellapi.h)
-* MacOS (Cocoa/AppKit)
-* Linux/Gtk (Qt6)
-
-GNOME has decided to deprecate the tray icon as a concept, except for system indicators. They have 
-not only deprecated the tray-handling code but removed it entirely.  Extensive investigation has
-failed to produce a reliable way to display tray icons, even using low-level X11 calls.  Qt _has_ 
-worked out a way to do it, so we are currently using their implementation on Linux, which 
-unfortunately requires C++ and much larger dependencies.  All of the Qt code is isolated in the
-library, so use of Qt is not required in application code (although it will use the application's 
-QApplication instance, should one exist).
-
-PRs that resolve this situation are very welcome!
-
-## API
-
-The `tray` structure defines the tray and a nested menu of NULL-terminated array of entries.
-`tray_menu_item` defines each menu entry text, menu checked and disabled (grayed) flags.
-
-The `tray` and `tray_menu_item` each have an optional callback if they are selected.
+## 🔧 C API
 
 ```c
 struct tray {
   const char *icon_filepath;
   char *tooltip;
-  void (*cb)(struct tray *); // called on left click, leave null to just open menu
+  void (*cb)(struct tray *); // Called on left-click
   struct tray_menu_item *menu; // NULL-terminated array of menu items
 };
 
@@ -61,68 +36,53 @@ struct tray_menu_item {
   int disabled;
   int checked;
   void (*cb)(struct tray_menu_item *);
-  struct tray_menu_item *submenu; // NULL-terminated array of submenu items
+  struct tray_menu_item *submenu; // NULL-terminated submenu
 };
+
+// Core API
+int tray_init(struct tray *);
+void tray_update(struct tray *);
+int tray_loop(int blocking);
+void tray_exit();
+struct tray *tray_get_instance();
+
+// Extra: get the tray icon screen position (custom addition)
+bool tray_get_icon_position(POINT *outPosition);
 ```
 
-* `int tray_init(struct tray *)` - creates tray icon. Returns -1 if tray icon/menu can't be created.
-* `struct tray * tray_get_instance()` - returns the tray instance.
-* `void tray_update(struct tray *)` - updates tray icon and menu.
-* `int tray_loop(int blocking)` - runs one iteration of the UI loop. Returns -1 if `tray_exit()` has been called.
-* `void tray_exit()` - terminates UI loop.
+All API functions must be called from the UI thread.
 
-All functions are meant to be called from the UI thread only.
+## 🔨 Build Instructions
 
-Menu arrays must be terminated with a NULL item, e.g. the last item in the
-array must have text field set to NULL.
+### Requirements
 
-## Icons
+* Visual Studio with CMake support
+* CMake 3.15 or later
+* Ninja (recommended)
 
-Icons are platform-specific but generally should have transparent backgrounds and be simple (since 
-they are tiny).
+### Build
 
-Tray does not provide any theming or icon management.  It is up to the application to respond
-to theme changes and supply appropriate icons e.g. dark mode.
-
-| Platform | Icon format                                                                             |
-|---------|:----------------------------------------------------------------------------------------|
-| Windows | .ICO with 16x16 & 32x32 sizes included                                                  |
-| MacOS   | .PNG with a notional 22pt height or vector-based .PDF (recommend black or white images) |
-| Linux   | .PNG 24x24 pixels                                                                       |
-
-## Prerequisites
-
-* CMake
-* [Ninja](https://ninja-build.org/), in order to have the same build commands on all platforms
-* Qt6 on Linux: `sudo apt install build-essential libgl1-mesa-dev qt6-base-dev`
-
-## Building
-
-```
+```sh
 mkdir build
 cd build
 cmake -G Ninja ..
 ninja
 ```
 
-## Demo
+### Demo
 
-Build & execute the `tray_example` application:
+Build and run the `tray_example.exe` binary for a working demonstration.
 
-```
-./tray_example
-```
+## 📦 JNI Integration
 
-## History
+This backend is compiled and linked with `ComposeNativeTray` and accessed from Kotlin using JNI. No external code or platform dependencies are required beyond the Win32 API.
 
-This fork brings together the [original work of Serge Zaitsev](https://github.com/zserge/tray) and
-the most interesting forks and PRs of respectable contributors including:
+## 🙏 Credits
 
-* Numerous enhancements from [StirlingLabs](https://github.com/StirlingLabs/tray) to make the functionality
- available as a library, for use from other languages.
-* [Only process messages coming from the tray window on Windows](https://github.com/zserge/tray/pull/18)
-* [Become C++-friendly](https://github.com/zserge/tray/pull/16)
-* [Fix all menu items have a check box](https://github.com/zserge/tray/pull/11)
-* [Add support for tooltip](https://github.com/zserge/tray/pull/11)
-* Darwin implementation translated from C to Objective C adapted from [@trevex fork](https://github.com/trevex/tray)
+This fork is based on the great work of:
 
+* [zserge/tray](https://github.com/zserge/tray)
+* [StirlingLabs](https://github.com/StirlingLabs/tray)
+* Other contributors to related forks and PRs
+
+> This repository is a focused and cleaned-up backend for Windows tray icons. Contributions related to Windows enhancements are welcome. Support for other platforms is out of scope.
