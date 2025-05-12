@@ -40,3 +40,5 @@ example.exe
 build/
 cmake-*
 .idea
+/.idea
+/cmake-build-minsizerel
