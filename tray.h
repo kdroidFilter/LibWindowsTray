@@ -50,6 +50,12 @@ void tray_update(struct tray *tray);
 TRAY_EXPORT
 void tray_exit(void);
 
+TRAY_EXPORT
+void tray_get_notification_icons_position(int *x, int *y);
+
+TRAY_EXPORT
+const char* tray_get_notification_icons_region();
+
 #ifdef __cplusplus
 } // extern "C"
 #endif
