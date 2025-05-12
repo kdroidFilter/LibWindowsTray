@@ -42,3 +42,6 @@ cmake-*
 .idea
 /.idea
 /cmake-build-minsizerel
+/build-arm64
+/build-x64
+/cmake-*
