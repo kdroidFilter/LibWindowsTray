@@ -16,16 +16,8 @@
 
 #include "tray.h"
 
-#if TRAY_QT
-#define TRAY_ICON1 "icon-24px.png"
-#define TRAY_ICON2 "icon2-24px.png"
-#elif TRAY_APPKIT
-#define TRAY_ICON1 "icon.png"
-#define TRAY_ICON2 "icon2.png"
-#elif TRAY_WINAPI
 #define TRAY_ICON1 "icon.ico"
 #define TRAY_ICON2 "icon2.ico"
-#endif
 
 void window_cb() {
   printf("window cb: this is where you would make a window visible.\n");
