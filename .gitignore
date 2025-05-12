@@ -39,3 +39,4 @@ example.exe
 .vscode/
 build/
 cmake-*
+.idea
