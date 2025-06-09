@@ -53,6 +53,9 @@ TRAY_EXPORT struct tray *tray_get_instance(void);
 TRAY_EXPORT int  tray_init (struct tray *tray);
 TRAY_EXPORT int  tray_loop (int blocking);       /* 0 = still running, -1 = finished */
 TRAY_EXPORT void tray_update(struct tray *tray); /* Refresh menu/info           */
+TRAY_EXPORT void tray_update_tooltip(struct tray *tray); /* Update only tooltip */
+TRAY_EXPORT void tray_update_icon(struct tray *tray);    /* Update only icon    */
+TRAY_EXPORT void tray_update_menu(struct tray *tray);    /* Update only menu    */
 TRAY_EXPORT void tray_exit (void);               /* Free all resources          */
 
 /* Notification area information */

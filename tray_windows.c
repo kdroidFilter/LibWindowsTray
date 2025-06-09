@@ -227,9 +227,28 @@ void tray_update(struct tray *tray)
     UINT   id = ID_TRAY_FIRST;
     hmenu = tray_menu_item(tray->menu, &id);
 
-    /* Icon */
+    /* Icon - Use LoadImage instead of ExtractIconExA to avoid caching */
     HICON icon = NULL;
-    ExtractIconExA(tray->icon_filepath, 0, NULL, &icon, 1);
+
+    /* First try LoadImage which gives us more control over the loading process */
+    icon = (HICON)LoadImageA(
+        NULL,                       /* hInstance - NULL for loading from file */
+        tray->icon_filepath,        /* lpszName - path to the icon */
+        IMAGE_ICON,                 /* uType - loading an icon */
+        0, 0,                       /* cx, cy - use default size */
+        LR_LOADFROMFILE |           /* Load from file */
+        LR_DEFAULTSIZE |            /* Use default metrics */
+        LR_SHARED |                 /* Share the image handle if possible */
+        LR_LOADTRANSPARENT |         /* Load with transparency */
+        LR_VGACOLOR  
+    );
+
+    /* Fall back to ExtractIconExA if LoadImage fails */
+    if (!icon) {
+        ExtractIconExA(tray->icon_filepath, 0, NULL, &icon, 1);
+    }
+
+    /* Update the icon */
     if (nid.hIcon) DestroyIcon(nid.hIcon);
     nid.hIcon = icon;
 
@@ -239,9 +258,103 @@ void tray_update(struct tray *tray)
         strncpy_s(nid.szTip, sizeof(nid.szTip), tray->tooltip, _TRUNCATE);
         nid.uFlags |= NIF_TIP;
     }
+
+    /* Update the notification icon using MODIFY instead of DELETE+ADD */
     Shell_NotifyIconA(NIM_MODIFY, &nid);
 
     if (old) DestroyMenu(old);
+    tray_instance = tray;
+}
+
+/* Updates only the tooltip */
+void tray_update_tooltip(struct tray *tray)
+{
+    if (!tray) return;
+
+    /* Update tooltip */
+    nid.uFlags = NIF_TIP;
+    if (tray->tooltip && *tray->tooltip) {
+        strncpy_s(nid.szTip, sizeof(nid.szTip), tray->tooltip, _TRUNCATE);
+    } else {
+        nid.szTip[0] = '\0';  /* Empty tooltip */
+    }
+
+    /* Update the notification icon using MODIFY */
+    Shell_NotifyIconA(NIM_MODIFY, &nid);
+
+    /* Update the global tray instance */
+    tray_instance = tray;
+}
+
+/* Updates only the icon */
+void tray_update_icon(struct tray *tray)
+{
+    if (!tray) return;
+
+    /* Icon - Use LoadImage instead of ExtractIconExA to avoid caching */
+    HICON icon = NULL;
+
+    /* First try LoadImage which gives us more control over the loading process */
+    icon = (HICON)LoadImageA(
+        NULL,                       /* hInstance - NULL for loading from file */
+        tray->icon_filepath,        /* lpszName - path to the icon */
+        IMAGE_ICON,                 /* uType - loading an icon */
+        0, 0,                       /* cx, cy - use default size */
+        LR_LOADFROMFILE |           /* Load from file */
+        LR_DEFAULTSIZE |            /* Use default metrics */
+        LR_SHARED |                 /* Share the image handle if possible */
+        LR_LOADTRANSPARENT |        /* Load with transparency */
+        LR_VGACOLOR  
+    );
+
+    /* Fall back to ExtractIconExA if LoadImage fails */
+    if (!icon) {
+        ExtractIconExA(tray->icon_filepath, 0, NULL, &icon, 1);
+    }
+
+    /* Update the icon */
+    if (nid.hIcon) DestroyIcon(nid.hIcon);
+    nid.hIcon = icon;
+
+    /* Set flags for icon update */
+    nid.uFlags = NIF_ICON;
+
+    /* Update the notification icon using MODIFY */
+    Shell_NotifyIconA(NIM_MODIFY, &nid);
+
+    /* Update the global tray instance */
+    tray_instance = tray;
+}
+
+/* Updates only the menu */
+void tray_update_menu(struct tray *tray)
+{
+    if (!tray) return;
+
+    /* Update menu */
+    HMENU old = hmenu;
+    UINT id = ID_TRAY_FIRST;
+    hmenu = tray_menu_item(tray->menu, &id);
+
+    /* Call Shell_NotifyIconA to ensure the tray icon is updated
+       This is necessary for Windows to recognize menu structure changes */
+    nid.uFlags = NIF_ICON | NIF_MESSAGE;
+
+    /* Force a redraw of the icon to ensure the menu is updated */
+    if (nid.hIcon) {
+        HICON icon = CopyIcon(nid.hIcon);
+        if (icon) {
+            DestroyIcon(nid.hIcon);
+            nid.hIcon = icon;
+        }
+    }
+
+    Shell_NotifyIconA(NIM_MODIFY, &nid);
+
+    /* Clean up old menu if it exists */
+    if (old) DestroyMenu(old);
+
+    /* Update the global tray instance */
     tray_instance = tray;
 }
 
