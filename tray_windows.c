@@ -46,11 +46,25 @@ static HWND             hwnd           = NULL;
 static HMENU            hmenu          = NULL;
 static UINT             wm_taskbarcreated;
 static BOOL             exit_called    = FALSE;
+static CRITICAL_SECTION tray_cs;
+static BOOL             cs_initialized = FALSE;
 
 /* -------------------------------------------------------------------------- */
 /*  Internal prototypes                                                       */
 /* -------------------------------------------------------------------------- */
 static HMENU tray_menu_item(struct tray_menu_item *m, UINT *id);
+static void ensure_critical_section(void);
+
+/* -------------------------------------------------------------------------- */
+/*  Critical section helper                                                   */
+/* -------------------------------------------------------------------------- */
+static void ensure_critical_section(void)
+{
+    if (!cs_initialized) {
+        InitializeCriticalSection(&tray_cs);
+        cs_initialized = TRUE;
+    }
+}
 
 /* -------------------------------------------------------------------------- */
 /*  Invisible window procedure                                                */
@@ -69,29 +83,42 @@ static LRESULT CALLBACK tray_wnd_proc(HWND h, UINT msg, WPARAM w, LPARAM l)
 
     case WM_TRAY_CALLBACK_MESSAGE:
         if (l == WM_LBUTTONUP && tray_instance && tray_instance->cb) {
-            tray_instance->cb(tray_instance);
+            EnterCriticalSection(&tray_cs);
+            if (tray_instance && tray_instance->cb) {
+                tray_instance->cb(tray_instance);
+            }
+            LeaveCriticalSection(&tray_cs);
             return 0;
         }
         if (l == WM_LBUTTONUP || l == WM_RBUTTONUP) {
             POINT p;
             GetCursorPos(&p);
             SetForegroundWindow(h);
-            WORD cmd = TrackPopupMenu(hmenu,
-                                      TPM_LEFTALIGN | TPM_RIGHTBUTTON |
-                                      TPM_RETURNCMD | TPM_NONOTIFY,
-                                      p.x, p.y, 0, h, NULL);
-            SendMessage(h, WM_COMMAND, cmd, 0);
+
+            EnterCriticalSection(&tray_cs);
+            if (hmenu) {
+                WORD cmd = TrackPopupMenu(hmenu,
+                                          TPM_LEFTALIGN | TPM_RIGHTBUTTON |
+                                          TPM_RETURNCMD | TPM_NONOTIFY,
+                                          p.x, p.y, 0, h, NULL);
+                SendMessage(h, WM_COMMAND, cmd, 0);
+            }
+            LeaveCriticalSection(&tray_cs);
             return 0;
         }
         break;
 
     case WM_COMMAND:
         if (w >= ID_TRAY_FIRST) {
-            MENUITEMINFOA item = { .cbSize = sizeof(item), .fMask = MIIM_ID | MIIM_DATA };
-            if (GetMenuItemInfoA(hmenu, (UINT)w, FALSE, &item)) {
-                struct tray_menu_item *mi = (struct tray_menu_item *)item.dwItemData;
-                if (mi && mi->cb) mi->cb(mi);
+            EnterCriticalSection(&tray_cs);
+            if (hmenu) {
+                MENUITEMINFOA item = { .cbSize = sizeof(item), .fMask = MIIM_ID | MIIM_DATA };
+                if (GetMenuItemInfoA(hmenu, (UINT)w, FALSE, &item)) {
+                    struct tray_menu_item *mi = (struct tray_menu_item *)item.dwItemData;
+                    if (mi && mi->cb) mi->cb(mi);
+                }
             }
+            LeaveCriticalSection(&tray_cs);
             return 0;
         }
         break;
@@ -148,6 +175,8 @@ int tray_init(struct tray *tray)
 {
     if (!tray) return -1;
 
+    ensure_critical_section();
+
     /* If a previous tray icon is still active, destroy it first */
     if (tray_instance) {
         tray_exit();              // Clean up previous instance
@@ -200,6 +229,8 @@ int tray_loop(int blocking)
 {
     MSG msg;
 
+    if (!hwnd) return -1;  // Ensure hwnd is valid
+
     if (blocking) {
         /* GetMessage blocks; <= 0  =>  WM_QUIT or error */
         if (GetMessageA(&msg, hwnd, 0, 0) <= 0)
@@ -223,14 +254,21 @@ void tray_update(struct tray *tray)
 {
     if (!tray) return;
 
+    ensure_critical_section();
+    EnterCriticalSection(&tray_cs);
+
     HMENU old = hmenu;
     UINT   id = ID_TRAY_FIRST;
     hmenu = tray_menu_item(tray->menu, &id);
 
     /* Icon */
     HICON icon = NULL;
-    ExtractIconExA(tray->icon_filepath, 0, NULL, &icon, 1);
-    if (nid.hIcon) DestroyIcon(nid.hIcon);
+    if (tray->icon_filepath && *tray->icon_filepath) {
+        ExtractIconExA(tray->icon_filepath, 0, NULL, &icon, 1);
+    }
+    if (nid.hIcon && nid.hIcon != icon) {
+        DestroyIcon(nid.hIcon);
+    }
     nid.hIcon = icon;
 
     /* Tooltip */
@@ -239,10 +277,16 @@ void tray_update(struct tray *tray)
         strncpy_s(nid.szTip, sizeof(nid.szTip), tray->tooltip, _TRUNCATE);
         nid.uFlags |= NIF_TIP;
     }
+
+    /* Store instance before modifying */
+    tray_instance = tray;
+
+    /* Update the tray */
     Shell_NotifyIconA(NIM_MODIFY, &nid);
 
     if (old) DestroyMenu(old);
-    tray_instance = tray;
+
+    LeaveCriticalSection(&tray_cs);
 }
 
 /* -------------------------------------------------------------------------- */
@@ -252,6 +296,10 @@ void tray_exit(void)
 {
     if (exit_called) return;
     exit_called = TRUE;
+
+    if (cs_initialized) {
+        EnterCriticalSection(&tray_cs);
+    }
 
     Shell_NotifyIconA(NIM_DELETE, &nid);           // Remove tray icon
 
@@ -267,6 +315,12 @@ void tray_exit(void)
     nid   = (NOTIFYICONDATAA){0};
     wc    = (WNDCLASSEXA){0};
     tray_instance = NULL;
+
+    if (cs_initialized) {
+        LeaveCriticalSection(&tray_cs);
+        DeleteCriticalSection(&tray_cs);
+        cs_initialized = FALSE;
+    }
 }
 
 /* -------------------------------------------------------------------------- */
