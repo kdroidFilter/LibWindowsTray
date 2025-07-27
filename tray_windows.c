@@ -233,11 +233,19 @@ int tray_loop(int blocking)
 
     if (blocking) {
         /* GetMessage blocks; <= 0  =>  WM_QUIT or error */
-        if (GetMessageA(&msg, hwnd, 0, 0) <= 0)
+        /* IMPORTANT: Use NULL instead of hwnd to get all thread messages */
+        int ret = GetMessageA(&msg, NULL, 0, 0);
+        if (ret == 0) {
+            /* WM_QUIT received */
             return -1;
+        } else if (ret < 0) {
+            /* Error */
+            return -1;
+        }
     } else {
         /* PeekMessage doesn't remove? → just continue */
-        if (!PeekMessageA(&msg, hwnd, 0, 0, PM_REMOVE))
+        /* IMPORTANT: Use NULL instead of hwnd to get all thread messages */
+        if (!PeekMessageA(&msg, NULL, 0, 0, PM_REMOVE))
             return 0;
     }
 
@@ -305,7 +313,12 @@ void tray_exit(void)
 
     if (nid.hIcon) DestroyIcon(nid.hIcon);
     if (hmenu)     DestroyMenu(hmenu);
-    if (hwnd)      DestroyWindow(hwnd);
+
+    /* Post WM_QUIT to unblock any blocking GetMessage call */
+    if (hwnd) {
+        PostMessageA(hwnd, WM_QUIT, 0, 0);
+        DestroyWindow(hwnd);
+    }
 
     UnregisterClassA(WC_TRAY_CLASS_NAME, GetModuleHandleA(NULL));
 
