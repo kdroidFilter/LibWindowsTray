@@ -56,7 +56,7 @@ TRAY_EXPORT void tray_update(struct tray *tray); /* Refresh menu/info           
 TRAY_EXPORT void tray_exit (void);               /* Free all resources          */
 
 /* Notification area information */
-TRAY_EXPORT void tray_get_notification_icons_position(int *x, int *y);
+TRAY_EXPORT int tray_get_notification_icons_position(int *x, int *y);
 TRAY_EXPORT const char *tray_get_notification_icons_region(void);
 
 #ifdef __cplusplus

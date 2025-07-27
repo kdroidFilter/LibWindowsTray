@@ -5,6 +5,7 @@
 #include <stddef.h>
 #include <string.h>
 #include "tray.h"
+#include <shellapi.h>
 
 /* -------------------------------------------------------------------------- */
 /*  Helpers: opt-in dark mode                                                 */
@@ -336,21 +337,46 @@ void tray_exit(void)
     }
 }
 
+static BOOL get_tray_icon_rect(RECT *r)
+{
+    HMODULE hShell = GetModuleHandleW(L"shell32.dll");
+    if (!hShell) return FALSE;
+
+    typedef HRESULT (WINAPI *NIGetRect_t)(const NOTIFYICONIDENTIFIER*, RECT*);
+    NIGetRect_t pGetRect = (NIGetRect_t)GetProcAddress(hShell, "Shell_NotifyIconGetRect");
+    if (!pGetRect) return FALSE;               /* OS trop ancien */
+
+    NOTIFYICONIDENTIFIER nii = { sizeof(nii) };
+    nii.hWnd = hwnd;        /* fenêtre propriétaire */
+    nii.uID  = nid.uID;     /* identifiant (0 ici) */
+    /*  sii.guidItem = nid.guidItem;  // si tu en utilises un */
+
+    return SUCCEEDED(pGetRect(&nii, r));
+}
+
+
 /* -------------------------------------------------------------------------- */
 /*  Notification area info                                                    */
 /* -------------------------------------------------------------------------- */
-void tray_get_notification_icons_position(int *x, int *y)
+int tray_get_notification_icons_position(int *x, int *y)    /* <--  BOOL → int */
 {
     RECT r = {0};
-    HWND hTray = FindWindowA("Shell_TrayWnd", NULL);
-    HWND hNotif = FindWindowExA(hTray, NULL, "TrayNotifyWnd", NULL);
+    BOOL precise = get_tray_icon_rect(&r);   /* TRUE si API moderne OK */
 
-    if (hNotif && GetWindowRect(hNotif, &r)) {
-        *x = r.left; *y = r.top;
-    } else {
-        *x = *y = 0;
+    if (!precise) {                          /* → on passe en fallback */
+        HWND hTray  = FindWindowA("Shell_TrayWnd", NULL);
+        HWND hNotif = FindWindowExA(hTray, NULL, "TrayNotifyWnd", NULL);
+        if (!hNotif || !GetWindowRect(hNotif, &r)) {
+            *x = *y = 0;
+            return 0;                        /* rien de fiable : abort */
+        }
     }
+
+    *x = r.left;
+    *y = r.top;
+    return precise ? 1 : 0;                  /* 1 = précis, 0 = fallback */
 }
+
 
 const char *tray_get_notification_icons_region(void)
 {
@@ -375,3 +401,4 @@ const char *tray_get_notification_icons_region(void)
     if (p.x < midX && p.y >= midY) return "bottom-left";
     return "bottom-right";
 }
+
