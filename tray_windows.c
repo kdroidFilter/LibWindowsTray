@@ -68,93 +68,77 @@ static void ensure_critical_section(void)
     }
 }
 
-/* -------------------------------------------------------------------------- */
-/*  Load icon as bitmap for menu items                                       */
-/* -------------------------------------------------------------------------- */
+/* ------------------------------------------------------------------ */
+/*  Conversion sûre d’une HICON en bitmap ARGB 32 bits                */
+/* ------------------------------------------------------------------ */
+static HBITMAP bitmap_from_icon(HICON hIcon, int cx, int cy)
+{
+    if (!hIcon) return NULL;
+
+    BITMAPINFO bi = {0};
+    bi.bmiHeader.biSize        = sizeof(bi.bmiHeader);
+    bi.bmiHeader.biWidth       = cx;
+    bi.bmiHeader.biHeight      = -cy;          /* orientation haut‑en‑bas */
+    bi.bmiHeader.biPlanes      = 1;
+    bi.bmiHeader.biBitCount    = 32;           /* BGRA */
+    bi.bmiHeader.biCompression = BI_RGB;
+
+    void   *bits = NULL;
+    HDC     hdc  = GetDC(NULL);
+    HBITMAP hbmp = CreateDIBSection(hdc, &bi, DIB_RGB_COLORS, &bits, NULL, 0);
+    if (hbmp) {
+        HDC hdcMem   = CreateCompatibleDC(hdc);
+        HBITMAP hold = (HBITMAP)SelectObject(hdcMem, hbmp);
+
+        DrawIconEx(hdcMem, 0, 0, hIcon, cx, cy, 0, NULL, DI_NORMAL);
+
+        SelectObject(hdcMem, hold);
+        DeleteDC(hdcMem);
+    }
+    ReleaseDC(NULL, hdc);
+    return hbmp;
+}
+
+/* ------------------------------------------------------------------ */
+/*  Chargement générique d’une icône/bitmap disque → bitmap ARGB      */
+/* ------------------------------------------------------------------ */
 static HBITMAP load_icon_bitmap(const char *icon_path)
 {
     if (!icon_path || !*icon_path) return NULL;
 
-    // Convert char* to wide string
+    /* Chemin UTF‑8 → Wide */
     int wlen = MultiByteToWideChar(CP_UTF8, 0, icon_path, -1, NULL, 0);
-    if (wlen == 0) return NULL;
+    if (!wlen) return NULL;
 
     WCHAR *wpath = (WCHAR*)malloc(wlen * sizeof(WCHAR));
     if (!wpath) return NULL;
-
     MultiByteToWideChar(CP_UTF8, 0, icon_path, -1, wpath, wlen);
 
-    // Load image as bitmap
-    HBITMAP hBitmap = (HBITMAP)LoadImageW(
-        NULL,
-        wpath,
+    /* 1º : essai direct .bmp /.png en DIB 32 bits ------------------- */
+    HBITMAP hbmp = (HBITMAP)LoadImageW(
+        NULL, wpath,
         IMAGE_BITMAP,
-        16,  // Standard menu icon width
-        16,  // Standard menu icon height
-        LR_LOADFROMFILE | LR_LOADTRANSPARENT
+        16, 16,
+        LR_LOADFROMFILE | LR_CREATEDIBSECTION | LR_DEFAULTSIZE
     );
+    if (hbmp) { free(wpath); return hbmp; }
 
-    // If loading as bitmap fails, try loading as icon and convert
-    if (!hBitmap) {
-        HICON hIcon = (HICON)LoadImageW(
-            NULL,
-            wpath,
-            IMAGE_ICON,
-            16,
-            16,
-            LR_LOADFROMFILE
-        );
-
-        if (hIcon) {
-            // Convert icon to bitmap
-            HDC hDC = GetDC(NULL);
-            if (!hDC) {
-                DestroyIcon(hIcon);
-                free(wpath);
-                return NULL;
-            }
-
-            HDC hMemDC = CreateCompatibleDC(hDC);
-            if (!hMemDC) {
-                ReleaseDC(NULL, hDC);
-                DestroyIcon(hIcon);
-                free(wpath);
-                return NULL;
-            }
-
-            hBitmap = CreateCompatibleBitmap(hDC, 16, 16);
-            if (!hBitmap) {
-                DeleteDC(hMemDC);
-                ReleaseDC(NULL, hDC);
-                DestroyIcon(hIcon);
-                free(wpath);
-                return NULL;
-            }
-
-            HBITMAP hOldBitmap = (HBITMAP)SelectObject(hMemDC, hBitmap);
-            if (hOldBitmap) {
-                // Succeeded in selecting
-                RECT rc = {0, 0, 16, 16};
-                FillRect(hMemDC, &rc, GetSysColorBrush(COLOR_MENU));  // Use menu background color for better blending
-
-                DrawIconEx(hMemDC, 0, 0, hIcon, 16, 16, 0, NULL, DI_NORMAL);
-
-                SelectObject(hMemDC, hOldBitmap);
-            } else {
-                // Select failed; discard bitmap
-                DeleteObject(hBitmap);
-                hBitmap = NULL;
-            }
-
-            DeleteDC(hMemDC);
-            ReleaseDC(NULL, hDC);
-            DestroyIcon(hIcon);
-        }
-    }
-
+    /* 2º : essai .ico → conversion ARGB ---------------------------- */
+    HICON hIcon = (HICON)LoadImageW(
+        NULL, wpath,
+        IMAGE_ICON,
+        16, 16,
+        LR_LOADFROMFILE | LR_DEFAULTSIZE
+    );
     free(wpath);
-    return hBitmap;
+
+    if (hIcon) {
+        hbmp = bitmap_from_icon(hIcon, 16, 16);
+        DestroyIcon(hIcon);
+    }
+    return hbmp;          /* NULL si tout a échoué */
 }
+
 /* -------------------------------------------------------------------------- */
 /*  Invisible window procedure                                                */
 /* -------------------------------------------------------------------------- */
