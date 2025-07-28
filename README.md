@@ -7,7 +7,7 @@ This repository contains a minimal, Windows-only C backend for displaying a syst
 * ✅ Focused only on **Windows** (all other platform code has been removed)
 * 🧼 Cleaned up to remove unnecessary files and platform-specific implementations
 * ➕ Added support for **tray icon position detection** to help with custom context menu placement
-* 🔗 JNI-friendly API for seamless integration with Kotlin/Compose
+* 🔗 JNA-friendly API for seamless integration with Kotlin/Compose
 
 ## ✅ Features
 
@@ -73,9 +73,9 @@ ninja
 
 Build and run the `tray_example.exe` binary for a working demonstration.
 
-## 📦 JNI Integration
+## 📦 JNA Integration
 
-This backend is compiled and linked with `ComposeNativeTray` and accessed from Kotlin using JNI. No external code or platform dependencies are required beyond the Win32 API.
+This backend is compiled and linked with `ComposeNativeTray` and accessed from Kotlin using JNA. No external code or platform dependencies are required beyond the Win32 API.
 
 ## 🙏 Credits
 
