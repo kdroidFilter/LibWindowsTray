@@ -35,7 +35,7 @@ target_compile_definitions(tray PRIVATE TRAY_WINAPI=1 WIN32_LEAN_AND_MEAN NOMINM
 
 # Link to Shell32.lib for Windows platform
 if(WIN32)
-    target_link_libraries(tray PRIVATE Shell32)
+    target_link_libraries(tray PRIVATE shell32)
 endif()
 
 # Define the installation path
@@ -64,3 +64,8 @@ if(CMAKE_BUILD_TYPE STREQUAL "MinSizeRel")
     target_compile_options(tray PRIVATE "/O1")  # Optimize for size
     set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} /OPT:REF /OPT:ICF")  # Remove unused code and merge identical functions
 endif()
+
+# Ajout de l'exemple en français
+add_executable(exemple ${CMAKE_CURRENT_SOURCE_DIR}/example.c)
+target_link_libraries(exemple PRIVATE tray)
+set_property(TARGET exemple PROPERTY C_STANDARD 99)

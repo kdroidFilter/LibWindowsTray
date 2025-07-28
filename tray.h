@@ -38,11 +38,12 @@ struct tray {
 };
 
 struct tray_menu_item {
-    const char              *text;               /* Label or "-" for separator  */
-    int                      disabled;           /* 1 → disabled (greyed out) */
-    int                      checked;            /* 1 → checked               */
-    void   (*cb)(struct tray_menu_item *);
-    struct tray_menu_item   *submenu;            /* NULL if no submenu          */
+    char *text;
+    char *icon_path;     // Path to icon file (PNG, ICO, etc.)
+    int disabled;
+    int checked;
+    void (*cb)(struct tray_menu_item *);
+    struct tray_menu_item *submenu;
 };
 
 /* -------------------------------------------------------------------------- */

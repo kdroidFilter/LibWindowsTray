@@ -1,11 +1,11 @@
-/* tray.c - Windows-only implementation */
+/* tray.c - Windows-only implementation with icon support */
 #define COBJMACROS
 #include <windows.h>
 #include <shellapi.h>
 #include <stddef.h>
+#include <stdlib.h>
 #include <string.h>
 #include "tray.h"
-#include <shellapi.h>
 
 /* -------------------------------------------------------------------------- */
 /*  Helpers: opt-in dark mode                                                 */
@@ -55,6 +55,7 @@ static BOOL             cs_initialized = FALSE;
 /* -------------------------------------------------------------------------- */
 static HMENU tray_menu_item(struct tray_menu_item *m, UINT *id);
 static void ensure_critical_section(void);
+static HBITMAP load_icon_bitmap(const char *icon_path);
 
 /* -------------------------------------------------------------------------- */
 /*  Critical section helper                                                   */
@@ -67,6 +68,93 @@ static void ensure_critical_section(void)
     }
 }
 
+/* -------------------------------------------------------------------------- */
+/*  Load icon as bitmap for menu items                                       */
+/* -------------------------------------------------------------------------- */
+static HBITMAP load_icon_bitmap(const char *icon_path)
+{
+    if (!icon_path || !*icon_path) return NULL;
+
+    // Convert char* to wide string
+    int wlen = MultiByteToWideChar(CP_UTF8, 0, icon_path, -1, NULL, 0);
+    if (wlen == 0) return NULL;
+
+    WCHAR *wpath = (WCHAR*)malloc(wlen * sizeof(WCHAR));
+    if (!wpath) return NULL;
+
+    MultiByteToWideChar(CP_UTF8, 0, icon_path, -1, wpath, wlen);
+
+    // Load image as bitmap
+    HBITMAP hBitmap = (HBITMAP)LoadImageW(
+        NULL,
+        wpath,
+        IMAGE_BITMAP,
+        16,  // Standard menu icon width
+        16,  // Standard menu icon height
+        LR_LOADFROMFILE | LR_LOADTRANSPARENT
+    );
+
+    // If loading as bitmap fails, try loading as icon and convert
+    if (!hBitmap) {
+        HICON hIcon = (HICON)LoadImageW(
+            NULL,
+            wpath,
+            IMAGE_ICON,
+            16,
+            16,
+            LR_LOADFROMFILE
+        );
+
+        if (hIcon) {
+            // Convert icon to bitmap
+            HDC hDC = GetDC(NULL);
+            if (!hDC) {
+                DestroyIcon(hIcon);
+                free(wpath);
+                return NULL;
+            }
+
+            HDC hMemDC = CreateCompatibleDC(hDC);
+            if (!hMemDC) {
+                ReleaseDC(NULL, hDC);
+                DestroyIcon(hIcon);
+                free(wpath);
+                return NULL;
+            }
+
+            hBitmap = CreateCompatibleBitmap(hDC, 16, 16);
+            if (!hBitmap) {
+                DeleteDC(hMemDC);
+                ReleaseDC(NULL, hDC);
+                DestroyIcon(hIcon);
+                free(wpath);
+                return NULL;
+            }
+
+            HBITMAP hOldBitmap = (HBITMAP)SelectObject(hMemDC, hBitmap);
+            if (hOldBitmap) {
+                // Succeeded in selecting
+                RECT rc = {0, 0, 16, 16};
+                FillRect(hMemDC, &rc, GetSysColorBrush(COLOR_MENU));  // Use menu background color for better blending
+
+                DrawIconEx(hMemDC, 0, 0, hIcon, 16, 16, 0, NULL, DI_NORMAL);
+
+                SelectObject(hMemDC, hOldBitmap);
+            } else {
+                // Select failed; discard bitmap
+                DeleteObject(hBitmap);
+                hBitmap = NULL;
+            }
+
+            DeleteDC(hMemDC);
+            ReleaseDC(NULL, hDC);
+            DestroyIcon(hIcon);
+        }
+    }
+
+    free(wpath);
+    return hBitmap;
+}
 /* -------------------------------------------------------------------------- */
 /*  Invisible window procedure                                                */
 /* -------------------------------------------------------------------------- */
@@ -134,35 +222,66 @@ static LRESULT CALLBACK tray_wnd_proc(HWND h, UINT msg, WPARAM w, LPARAM l)
 }
 
 /* -------------------------------------------------------------------------- */
-/*  Recursive HMENU construction                                              */
+/*  Recursive HMENU construction with safe icon support                       */
 /* -------------------------------------------------------------------------- */
 static HMENU tray_menu_item(struct tray_menu_item *m, UINT *id)
 {
     HMENU menu = CreatePopupMenu();
-    for (; m && m->text; ++m, ++(*id)) {
+    if (!menu) return NULL;
+
+    for (; m && m->text; ++m) {
+
+        /* ------------------------------------------------------------------ */
+        /*  Séparateur « - »                                                 */
+        /* ------------------------------------------------------------------ */
         if (strcmp(m->text, "-") == 0) {
-            InsertMenuA(menu, *id, MF_SEPARATOR, TRUE, "");
+            AppendMenuA(menu, MF_SEPARATOR, 0, NULL);
             continue;
         }
 
-        MENUITEMINFOA info = {0};
+        /* ------------------------------------------------------------------ */
+        /*  Élément normal (texte + éventuelle icône + sous‑menu)             */
+        /* ------------------------------------------------------------------ */
+        MENUITEMINFOA info;
+        ZeroMemory(&info, sizeof(info));
         info.cbSize = sizeof(info);
-        info.fMask  = MIIM_ID | MIIM_TYPE | MIIM_STATE | MIIM_DATA;
-        info.wID    = *id;
-        info.dwTypeData = (LPSTR)m->text;
-        info.dwItemData = (ULONG_PTR)m;
 
+        /* Texte : MIIM_STRING + MFT_STRING au lieu de MIIM_TYPE              */
+        info.fMask      = MIIM_ID | MIIM_STRING | MIIM_STATE |
+                          MIIM_FTYPE | MIIM_DATA;
+        info.fType      = MFT_STRING;
+        info.dwTypeData = (LPSTR)m->text;
+        info.cch        = (UINT)strlen(m->text);
+
+        /* Identifiant unique                                                */
+        info.wID        = (*id)++;                 /* consomme un ID          */
+        info.dwItemData = (ULONG_PTR)m;            /* pointeur item → cb      */
+
+        /* Sous‑menu éventuel                                                */
         if (m->submenu) {
-            info.fMask |= MIIM_SUBMENU;
+            info.fMask   |= MIIM_SUBMENU;
             info.hSubMenu = tray_menu_item(m->submenu, id);
         }
+
+        /* État (désactivé / coché)                                          */
         if (m->disabled) info.fState |= MFS_DISABLED;
         if (m->checked)  info.fState |= MFS_CHECKED;
 
-        InsertMenuItemA(menu, *id, TRUE, &info);
+        /* Icône optionnelle                                                 */
+        if (m->icon_path && *m->icon_path) {
+            HBITMAP hBmp = load_icon_bitmap(m->icon_path);
+            if (hBmp) {
+                info.fMask    |= MIIM_BITMAP;      /*  OK avec MIIM_STRING    */
+                info.hbmpItem  = hBmp;
+            }
+        }
+
+        /* Append en fin de menu pour éviter les index hors‑plage            */
+        InsertMenuItemA(menu, (UINT)-1, TRUE, &info);
     }
     return menu;
 }
+
 
 /* -------------------------------------------------------------------------- */
 /*  Public API                                                                */
@@ -266,7 +385,24 @@ void tray_update(struct tray *tray)
     ensure_critical_section();
     EnterCriticalSection(&tray_cs);
 
-    HMENU old = hmenu;
+    // Clean up old menu and its bitmaps
+    if (hmenu) {
+        // Recursively clean up bitmaps from menu items
+        MENUITEMINFOA item = {0};
+        item.cbSize = sizeof(item);
+        item.fMask = MIIM_BITMAP;
+
+        int count = GetMenuItemCount(hmenu);
+        for (int i = 0; i < count; i++) {
+            if (GetMenuItemInfoA(hmenu, i, TRUE, &item)) {
+                if (item.hbmpItem && item.hbmpItem != HBMMENU_CALLBACK) {
+                    DeleteObject(item.hbmpItem);
+                }
+            }
+        }
+        DestroyMenu(hmenu);
+    }
+
     UINT   id = ID_TRAY_FIRST;
     hmenu = tray_menu_item(tray->menu, &id);
 
@@ -293,8 +429,6 @@ void tray_update(struct tray *tray)
     /* Update the tray */
     Shell_NotifyIconA(NIM_MODIFY, &nid);
 
-    if (old) DestroyMenu(old);
-
     LeaveCriticalSection(&tray_cs);
 }
 
@@ -313,7 +447,23 @@ void tray_exit(void)
     Shell_NotifyIconA(NIM_DELETE, &nid);           // Remove tray icon
 
     if (nid.hIcon) DestroyIcon(nid.hIcon);
-    if (hmenu)     DestroyMenu(hmenu);
+
+    // Clean up menu and its bitmaps
+    if (hmenu) {
+        MENUITEMINFOA item = {0};
+        item.cbSize = sizeof(item);
+        item.fMask = MIIM_BITMAP;
+
+        int count = GetMenuItemCount(hmenu);
+        for (int i = 0; i < count; i++) {
+            if (GetMenuItemInfoA(hmenu, i, TRUE, &item)) {
+                if (item.hbmpItem && item.hbmpItem != HBMMENU_CALLBACK) {
+                    DeleteObject(item.hbmpItem);
+                }
+            }
+        }
+        DestroyMenu(hmenu);
+    }
 
     /* Post WM_QUIT to unblock any blocking GetMessage call */
     if (hwnd) {
@@ -368,7 +518,7 @@ int tray_get_notification_icons_position(int *x, int *y)    /* <--  BOOL → int
         HWND hNotif = FindWindowExA(hTray, NULL, "TrayNotifyWnd", NULL);
         if (!hNotif || !GetWindowRect(hNotif, &r)) {
             *x = *y = 0;
-            return 0;                        /* rien de fiable : abort */
+            return 0;                        /* rien de fiable : abort */
         }
     }
 
@@ -401,4 +551,3 @@ const char *tray_get_notification_icons_region(void)
     if (p.x < midX && p.y >= midY) return "bottom-left";
     return "bottom-right";
 }
-
