@@ -1,5 +1,7 @@
-/* tray.c - Windows-only implementation with icon support */
+/* tray.c - Windows implementation with full Unicode support */
 #define COBJMACROS
+#define UNICODE
+#define _UNICODE
 #include <windows.h>
 #include <shellapi.h>
 #include <stddef.h>
@@ -31,19 +33,52 @@ static void tray_enable_dark_mode(void)
 }
 
 /* -------------------------------------------------------------------------- */
+/*  UTF-8 to UTF-16 conversion helper                                         */
+/* -------------------------------------------------------------------------- */
+static LPWSTR utf8_to_wide(const char *utf8_str)
+{
+    if (!utf8_str || !*utf8_str) return NULL;
+
+    int wlen = MultiByteToWideChar(CP_UTF8, 0, utf8_str, -1, NULL, 0);
+    if (wlen <= 0) return NULL;
+
+    LPWSTR wide_str = (LPWSTR)malloc(wlen * sizeof(WCHAR));
+    if (!wide_str) return NULL;
+
+    MultiByteToWideChar(CP_UTF8, 0, utf8_str, -1, wide_str, wlen);
+    return wide_str;
+}
+
+/* -------------------------------------------------------------------------- */
+/*  UTF-16 to UTF-8 conversion helper                                         */
+/* -------------------------------------------------------------------------- */
+static char* wide_to_utf8(const WCHAR *wide_str)
+{
+    if (!wide_str || !*wide_str) return NULL;
+
+    int utf8_len = WideCharToMultiByte(CP_UTF8, 0, wide_str, -1, NULL, 0, NULL, NULL);
+    if (utf8_len <= 0) return NULL;
+
+    char *utf8_str = (char*)malloc(utf8_len);
+    if (!utf8_str) return NULL;
+
+    WideCharToMultiByte(CP_UTF8, 0, wide_str, -1, utf8_str, utf8_len, NULL, NULL);
+    return utf8_str;
+}
+
+/* -------------------------------------------------------------------------- */
 /*  Internal constants                                                        */
 /* -------------------------------------------------------------------------- */
 #define WM_TRAY_CALLBACK_MESSAGE (WM_USER + 1)
-#define WC_TRAY_CLASS_NAME       "TRAY"
+#define WC_TRAY_CLASS_NAME       L"TRAY"
 #define ID_TRAY_FIRST            1000
 
 /* -------------------------------------------------------------------------- */
 /*  Internal variables                                                        */
 /* -------------------------------------------------------------------------- */
-/* Legacy singletons (kept for backward compatibility; no longer used for state) */
 static struct tray     *tray_instance  = NULL;   /* unused in multi-instance mode */
-static WNDCLASSEX       wc             = {0};
-static NOTIFYICONDATAA  nid            = {0};    /* unused in multi-instance mode */
+static WNDCLASSEXW      wc             = {0};
+static NOTIFYICONDATAW  nid            = {0};    /* unused in multi-instance mode */
 static HWND             hwnd           = NULL;   /* unused in multi-instance mode */
 static HMENU            hmenu          = NULL;   /* unused in multi-instance mode */
 static UINT             wm_taskbarcreated;
@@ -56,7 +91,7 @@ typedef struct TrayContext {
     struct tray *tray;                /* public tray pointer (key)        */
     HWND         hwnd;                /* hidden window for messages       */
     HMENU        hmenu;               /* root menu                        */
-    NOTIFYICONDATAA nid;              /* per-icon notify data             */
+    NOTIFYICONDATAW nid;              /* per-icon notify data             */
     UINT         uID;                 /* unique id for Shell_NotifyIcon   */
     DWORD        threadId;            /* thread that owns this context    */
     BOOL         exiting;             /* exit requested for this context  */
@@ -168,12 +203,12 @@ static void destroy_ctx(TrayContext *ctx)
 
     /* Free menu */
     if (ctx->hmenu) {
-        MENUITEMINFOA item = {0};
+        MENUITEMINFOW item = {0};
         item.cbSize = sizeof(item);
         item.fMask = MIIM_BITMAP;
         int count = GetMenuItemCount(ctx->hmenu);
         for (int i = 0; i < count; i++) {
-            if (GetMenuItemInfoA(ctx->hmenu, i, TRUE, &item)) {
+            if (GetMenuItemInfoW(ctx->hmenu, i, TRUE, &item)) {
                 if (item.hbmpItem && item.hbmpItem != HBMMENU_CALLBACK) {
                     DeleteObject(item.hbmpItem);
                 }
@@ -199,7 +234,7 @@ static void destroy_ctx(TrayContext *ctx)
 }
 
 /* ------------------------------------------------------------------ */
-/*  Conversion sûre d’une HICON en bitmap ARGB 32 bits                */
+/*  Safe conversion of an HICON to ARGB 32-bit bitmap                */
 /* ------------------------------------------------------------------ */
 static HBITMAP bitmap_from_icon(HICON hIcon, int cx, int cy)
 {
@@ -208,7 +243,7 @@ static HBITMAP bitmap_from_icon(HICON hIcon, int cx, int cy)
     BITMAPINFO bi = {0};
     bi.bmiHeader.biSize        = sizeof(bi.bmiHeader);
     bi.bmiHeader.biWidth       = cx;
-    bi.bmiHeader.biHeight      = -cy;          /* orientation haut‑en‑bas */
+    bi.bmiHeader.biHeight      = -cy;          /* top-down orientation */
     bi.bmiHeader.biPlanes      = 1;
     bi.bmiHeader.biBitCount    = 32;           /* BGRA */
     bi.bmiHeader.biCompression = BI_RGB;
@@ -230,30 +265,29 @@ static HBITMAP bitmap_from_icon(HICON hIcon, int cx, int cy)
 }
 
 /* ------------------------------------------------------------------ */
-/*  Chargement générique d’une icône/bitmap disque → bitmap ARGB      */
+/*  Generic loading of icon/bitmap from disk → ARGB bitmap           */
 /* ------------------------------------------------------------------ */
 static HBITMAP load_icon_bitmap(const char *icon_path)
 {
     if (!icon_path || !*icon_path) return NULL;
 
-    /* Chemin UTF‑8 → Wide */
-    int wlen = MultiByteToWideChar(CP_UTF8, 0, icon_path, -1, NULL, 0);
-    if (!wlen) return NULL;
-
-    WCHAR *wpath = (WCHAR*)malloc(wlen * sizeof(WCHAR));
+    /* Convert UTF-8 path to Wide */
+    LPWSTR wpath = utf8_to_wide(icon_path);
     if (!wpath) return NULL;
-    MultiByteToWideChar(CP_UTF8, 0, icon_path, -1, wpath, wlen);
 
-    /* 1º : essai direct .bmp /.png en DIB 32 bits ------------------- */
+    /* 1st: try direct .bmp/.png as 32-bit DIB */
     HBITMAP hbmp = (HBITMAP)LoadImageW(
         NULL, wpath,
         IMAGE_BITMAP,
         16, 16,
         LR_LOADFROMFILE | LR_CREATEDIBSECTION | LR_DEFAULTSIZE
     );
-    if (hbmp) { free(wpath); return hbmp; }
+    if (hbmp) {
+        free(wpath);
+        return hbmp;
+    }
 
-    /* 2º : essai .ico → conversion ARGB ---------------------------- */
+    /* 2nd: try .ico → ARGB conversion */
     HICON hIcon = (HICON)LoadImageW(
         NULL, wpath,
         IMAGE_ICON,
@@ -266,7 +300,7 @@ static HBITMAP load_icon_bitmap(const char *icon_path)
         hbmp = bitmap_from_icon(hIcon, 16, 16);
         DestroyIcon(hIcon);
     }
-    return hbmp;          /* NULL si tout a échoué */
+    return hbmp;
 }
 
 /* -------------------------------------------------------------------------- */
@@ -316,10 +350,10 @@ static LRESULT CALLBACK tray_wnd_proc(HWND h, UINT msg, WPARAM w, LPARAM l)
         if (w >= ID_TRAY_FIRST) {
             EnterCriticalSection(&tray_cs);
             if (ctx && ctx->hmenu) {
-                MENUITEMINFOA item = { 0 };
+                MENUITEMINFOW item = { 0 };
                 item.cbSize = sizeof(item);
                 item.fMask = MIIM_ID | MIIM_DATA;
-                if (GetMenuItemInfoA(ctx->hmenu, (UINT)w, FALSE, &item)) {
+                if (GetMenuItemInfoW(ctx->hmenu, (UINT)w, FALSE, &item)) {
                     struct tray_menu_item *mi = (struct tray_menu_item *)item.dwItemData;
                     if (mi && mi->cb) mi->cb(mi);
                 }
@@ -332,12 +366,12 @@ static LRESULT CALLBACK tray_wnd_proc(HWND h, UINT msg, WPARAM w, LPARAM l)
     default:
         if (msg == wm_taskbarcreated) {
             if (ctx) {
-                Shell_NotifyIconA(NIM_ADD, &ctx->nid);
+                Shell_NotifyIconW(NIM_ADD, &ctx->nid);
             }
             return 0;
         }
     }
-    return DefWindowProcA(h, msg, w, l);
+    return DefWindowProcW(h, msg, w, l);
 }
 
 /* -------------------------------------------------------------------------- */
@@ -350,62 +384,63 @@ static HMENU tray_menu_item(struct tray_menu_item *m, UINT *id)
 
     for (; m && m->text; ++m) {
 
-        /* ------------------------------------------------------------------ */
-        /*  Séparateur « - »                                                 */
-        /* ------------------------------------------------------------------ */
+        /* Separator "-" */
         if (strcmp(m->text, "-") == 0) {
-            AppendMenuA(menu, MF_SEPARATOR, 0, NULL);
+            AppendMenuW(menu, MF_SEPARATOR, 0, NULL);
             continue;
         }
 
-        /* ------------------------------------------------------------------ */
-        /*  Élément normal (texte + éventuelle icône + sous‑menu)             */
-        /* ------------------------------------------------------------------ */
-        MENUITEMINFOA info;
+        /* Normal item (text + optional icon + submenu) */
+        MENUITEMINFOW info;
         ZeroMemory(&info, sizeof(info));
         info.cbSize = sizeof(info);
 
-        /* Texte : MIIM_STRING + MFT_STRING au lieu de MIIM_TYPE              */
+        /* Convert UTF-8 text to Wide */
+        LPWSTR wtext = utf8_to_wide(m->text);
+        if (!wtext) continue;
+
+        /* Text: MIIM_STRING + MFT_STRING instead of MIIM_TYPE */
         info.fMask      = MIIM_ID | MIIM_STRING | MIIM_STATE |
                           MIIM_FTYPE | MIIM_DATA;
         info.fType      = MFT_STRING;
-        info.dwTypeData = (LPSTR)m->text;
-        info.cch        = (UINT)strlen(m->text);
+        info.dwTypeData = wtext;
+        info.cch        = (UINT)wcslen(wtext);
 
-        /* Identifiant unique                                                */
-        info.wID        = (*id)++;                 /* consomme un ID          */
-        info.dwItemData = (ULONG_PTR)m;            /* pointeur item → cb      */
+        /* Unique identifier */
+        info.wID        = (*id)++;
+        info.dwItemData = (ULONG_PTR)m;
 
-        /* Sous‑menu éventuel                                                */
+        /* Optional submenu */
         if (m->submenu) {
             info.fMask   |= MIIM_SUBMENU;
             info.hSubMenu = tray_menu_item(m->submenu, id);
         }
 
-        /* État (désactivé / coché)                                          */
+        /* State (disabled / checked) */
         if (m->disabled) info.fState |= MFS_DISABLED;
         if (m->checked)  info.fState |= MFS_CHECKED;
 
-        /* Icône optionnelle                                                 */
+        /* Optional icon */
         if (m->icon_path && *m->icon_path) {
             HBITMAP hBmp = load_icon_bitmap(m->icon_path);
             if (hBmp) {
-                info.fMask    |= MIIM_BITMAP;      /*  OK avec MIIM_STRING    */
+                info.fMask    |= MIIM_BITMAP;
                 info.hbmpItem  = hBmp;
             }
         }
 
-        /* Append en fin de menu pour éviter les index hors‑plage            */
-        InsertMenuItemA(menu, (UINT)-1, TRUE, &info);
+        /* Append at end of menu to avoid out-of-range indexes */
+        InsertMenuItemW(menu, (UINT)-1, TRUE, &info);
+
+        free(wtext);
     }
     return menu;
 }
 
-
 /* -------------------------------------------------------------------------- */
 /*  Public API                                                                */
 /* -------------------------------------------------------------------------- */
-struct tray *tray_get_instance(void) { 
+struct tray *tray_get_instance(void) {
     ensure_critical_section();
     EnterCriticalSection(&tray_cs);
     TrayContext *ctx = find_ctx_by_thread(GetCurrentThreadId());
@@ -425,15 +460,15 @@ int tray_init(struct tray *tray)
     ensure_critical_section();
 
     tray_enable_dark_mode();
-    wm_taskbarcreated = RegisterWindowMessageA("TaskbarCreated");
+    wm_taskbarcreated = RegisterWindowMessageW(L"TaskbarCreated");
 
     // Register (ignore if the class already exists)
     ZeroMemory(&wc, sizeof(wc));
     wc.cbSize        = sizeof(wc);
     wc.lpfnWndProc   = tray_wnd_proc;
-    wc.hInstance     = GetModuleHandleA(NULL);
+    wc.hInstance     = GetModuleHandleW(NULL);
     wc.lpszClassName = WC_TRAY_CLASS_NAME;
-    if (!RegisterClassExA(&wc) && GetLastError() != ERROR_CLASS_ALREADY_EXISTS)
+    if (!RegisterClassExW(&wc) && GetLastError() != ERROR_CLASS_ALREADY_EXISTS)
         return -1;
 
     EnterCriticalSection(&tray_cs);
@@ -442,7 +477,7 @@ int tray_init(struct tray *tray)
     LeaveCriticalSection(&tray_cs);
     if (!ctx) return -1;
 
-    ctx->hwnd = CreateWindowExA(
+    ctx->hwnd = CreateWindowExW(
         0,
         WC_TRAY_CLASS_NAME,
         NULL,
@@ -450,7 +485,7 @@ int tray_init(struct tray *tray)
         0, 0, 0, 0,
         0,
         0,
-        GetModuleHandleA(NULL),
+        GetModuleHandleW(NULL),
         NULL);
     if (!ctx->hwnd) return -1;
 
@@ -460,7 +495,7 @@ int tray_init(struct tray *tray)
     ctx->nid.uID              = ctx->uID;
     ctx->nid.uFlags           = NIF_ICON | NIF_MESSAGE;
     ctx->nid.uCallbackMessage = WM_TRAY_CALLBACK_MESSAGE;
-    Shell_NotifyIconA(NIM_ADD, &ctx->nid);
+    Shell_NotifyIconW(NIM_ADD, &ctx->nid);
 
     tray_update(tray);
     return 0;
@@ -479,14 +514,14 @@ int tray_loop(int blocking)
     if (!ctx) return -1;
 
     if (blocking) {
-        int ret = GetMessageA(&msg, NULL, 0, 0);
+        int ret = GetMessageW(&msg, NULL, 0, 0);
         if (ret == 0) {
             return -1; /* WM_QUIT */
         } else if (ret < 0) {
             return -1; /* Error */
         }
     } else {
-        if (!PeekMessageA(&msg, NULL, 0, 0, PM_REMOVE))
+        if (!PeekMessageW(&msg, NULL, 0, 0, PM_REMOVE))
             return 0;
     }
 
@@ -494,7 +529,7 @@ int tray_loop(int blocking)
         return -1;
 
     TranslateMessage(&msg);
-    DispatchMessageA(&msg);
+    DispatchMessageW(&msg);
     return 0;
 }
 
@@ -516,13 +551,13 @@ void tray_update(struct tray *tray)
 
     // Clean up old menu and its bitmaps
     if (ctx->hmenu) {
-        MENUITEMINFOA item = {0};
+        MENUITEMINFOW item = {0};
         item.cbSize = sizeof(item);
         item.fMask = MIIM_BITMAP;
 
         int count = GetMenuItemCount(ctx->hmenu);
         for (int i = 0; i < count; i++) {
-            if (GetMenuItemInfoA(ctx->hmenu, i, TRUE, &item)) {
+            if (GetMenuItemInfoW(ctx->hmenu, i, TRUE, &item)) {
                 if (item.hbmpItem && item.hbmpItem != HBMMENU_CALLBACK) {
                     DeleteObject(item.hbmpItem);
                 }
@@ -538,7 +573,11 @@ void tray_update(struct tray *tray)
     /* Icon */
     HICON icon = NULL;
     if (tray->icon_filepath && *tray->icon_filepath) {
-        ExtractIconExA(tray->icon_filepath, 0, NULL, &icon, 1);
+        LPWSTR wpath = utf8_to_wide(tray->icon_filepath);
+        if (wpath) {
+            ExtractIconExW(wpath, 0, NULL, &icon, 1);
+            free(wpath);
+        }
     }
     if (ctx->nid.hIcon && ctx->nid.hIcon != icon) {
         DestroyIcon(ctx->nid.hIcon);
@@ -548,12 +587,16 @@ void tray_update(struct tray *tray)
     /* Tooltip */
     ctx->nid.uFlags = NIF_ICON | NIF_MESSAGE;
     if (tray->tooltip && *tray->tooltip) {
-        strncpy_s(ctx->nid.szTip, sizeof(ctx->nid.szTip), tray->tooltip, _TRUNCATE);
-        ctx->nid.uFlags |= NIF_TIP;
+        LPWSTR wtooltip = utf8_to_wide(tray->tooltip);
+        if (wtooltip) {
+            wcsncpy_s(ctx->nid.szTip, sizeof(ctx->nid.szTip)/sizeof(WCHAR), wtooltip, _TRUNCATE);
+            ctx->nid.uFlags |= NIF_TIP;
+            free(wtooltip);
+        }
     }
 
     /* Update the tray */
-    Shell_NotifyIconA(NIM_MODIFY, &ctx->nid);
+    Shell_NotifyIconW(NIM_MODIFY, &ctx->nid);
 
     LeaveCriticalSection(&tray_cs);
 }
@@ -574,7 +617,7 @@ void tray_exit(void)
     }
 
     /* Remove tray icon */
-    Shell_NotifyIconA(NIM_DELETE, &ctx->nid);
+    Shell_NotifyIconW(NIM_DELETE, &ctx->nid);
     if (ctx->nid.hIcon) {
         DestroyIcon(ctx->nid.hIcon);
         ctx->nid.hIcon = NULL;
@@ -582,7 +625,7 @@ void tray_exit(void)
 
     /* Post WM_QUIT to unblock any blocking GetMessage call and destroy window */
     if (ctx->hwnd) {
-        PostMessageA(ctx->hwnd, WM_QUIT, 0, 0);
+        PostMessageW(ctx->hwnd, WM_QUIT, 0, 0);
         DestroyWindow(ctx->hwnd);
         ctx->hwnd = NULL;
     }
@@ -592,7 +635,7 @@ void tray_exit(void)
 
     /* If no more contexts, unregister class and optionally release critical section */
     if (!g_ctx_head) {
-        UnregisterClassA(WC_TRAY_CLASS_NAME, GetModuleHandleA(NULL));
+        UnregisterClassW(WC_TRAY_CLASS_NAME, GetModuleHandleW(NULL));
         LeaveCriticalSection(&tray_cs);
         DeleteCriticalSection(&tray_cs);
         cs_initialized = FALSE;
@@ -629,11 +672,10 @@ static BOOL get_tray_icon_rect(RECT *r)
     return SUCCEEDED(pGetRect(&nii, r));
 }
 
-
 /* -------------------------------------------------------------------------- */
 /*  Notification area info                                                    */
 /* -------------------------------------------------------------------------- */
-int tray_get_notification_icons_position(int *x, int *y)    /* <--  BOOL → int */
+int tray_get_notification_icons_position(int *x, int *y)
 {
     RECT r = {0};
     BOOL precise = get_tray_icon_rect(&r);   /* TRUE if modern API OK */
@@ -646,7 +688,7 @@ int tray_get_notification_icons_position(int *x, int *y)    /* <--  BOOL → int
         HMONITOR hMon = MonitorFromRect(&r, MONITOR_DEFAULTTOPRIMARY);
         MONITORINFO mi = {0};
         mi.cbSize = sizeof(mi);
-        if (GetMonitorInfoA(hMon, &mi)) {
+        if (GetMonitorInfoW(hMon, &mi)) {
             LONG midY = (mi.rcMonitor.bottom + mi.rcMonitor.top) / 2;
             /* If icon is on top half of monitor, anchor below it; otherwise above */
             cy = (r.top < midY) ? r.bottom : r.top;
@@ -659,8 +701,8 @@ int tray_get_notification_icons_position(int *x, int *y)    /* <--  BOOL → int
         return 1;                           /* precise */
     } else {
         /* Fallback: use notification area window rect (top-left) */
-        HWND hTray  = FindWindowA("Shell_TrayWnd", NULL);
-        HWND hNotif = FindWindowExA(hTray, NULL, "TrayNotifyWnd", NULL);
+        HWND hTray  = FindWindowW(L"Shell_TrayWnd", NULL);
+        HWND hNotif = FindWindowExW(hTray, NULL, L"TrayNotifyWnd", NULL);
         if (!hNotif || !GetWindowRect(hNotif, &r)) {
             *x = *y = 0;
             return 0;                        /* nothing reliable */
@@ -671,13 +713,12 @@ int tray_get_notification_icons_position(int *x, int *y)    /* <--  BOOL → int
     }
 }
 
-
 const char *tray_get_notification_icons_region(void)
 {
     RECT  r;
     POINT p = {0, 0};
-    HWND  hTray = FindWindowA("Shell_TrayWnd", NULL);
-    HWND  hNotif = FindWindowExA(hTray, NULL, "TrayNotifyWnd", NULL);
+    HWND  hTray = FindWindowW(L"Shell_TrayWnd", NULL);
+    HWND  hNotif = FindWindowExW(hTray, NULL, L"TrayNotifyWnd", NULL);
 
     if (hNotif && GetWindowRect(hNotif, &r)) {
         p.x = r.left; p.y = r.top;
@@ -685,7 +726,7 @@ const char *tray_get_notification_icons_region(void)
 
     HMONITOR hMon = MonitorFromWindow(hNotif, MONITOR_DEFAULTTOPRIMARY);
     MONITORINFO mi = { .cbSize = sizeof(mi) };
-    GetMonitorInfoA(hMon, &mi);
+    GetMonitorInfoW(hMon, &mi);
 
     LONG midX = (mi.rcMonitor.right  + mi.rcMonitor.left) / 2;
     LONG midY = (mi.rcMonitor.bottom + mi.rcMonitor.top)  / 2;
