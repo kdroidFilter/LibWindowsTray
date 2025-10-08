@@ -673,7 +673,59 @@ static BOOL get_tray_icon_rect(RECT *r)
 }
 
 /* -------------------------------------------------------------------------- */
-/*  Notification area info                                                    */
+/*  DPI-aware coordinate conversion helpers                                   */
+/* -------------------------------------------------------------------------- */
+static double get_dpi_scale_for_monitor(HMONITOR hMon)
+{
+    /* Try to get DPI scale for this monitor (Windows 8.1+) */
+    HMODULE hShcore = LoadLibraryW(L"Shcore.dll");
+    if (hShcore) {
+        typedef HRESULT (WINAPI *GetDpiForMonitor_t)(HMONITOR, int, UINT*, UINT*);
+        GetDpiForMonitor_t pGetDpiForMonitor =
+            (GetDpiForMonitor_t)GetProcAddress(hShcore, "GetDpiForMonitor");
+
+        if (pGetDpiForMonitor) {
+            UINT dpiX = 96, dpiY = 96;
+            /* MDT_EFFECTIVE_DPI = 0 */
+            if (SUCCEEDED(pGetDpiForMonitor(hMon, 0, &dpiX, &dpiY))) {
+                FreeLibrary(hShcore);
+                return (double)dpiX / 96.0;
+            }
+        }
+        FreeLibrary(hShcore);
+    }
+
+    /* Fallback: get system-wide DPI */
+    HDC hdc = GetDC(NULL);
+    if (hdc) {
+        int dpiX = GetDeviceCaps(hdc, LOGPIXELSX);
+        ReleaseDC(NULL, hdc);
+        return (double)dpiX / 96.0;
+    }
+
+    return 1.0; /* No scaling */
+}
+
+static void physical_to_logical_point(POINT *pt, double scale)
+{
+    if (scale > 0.0 && scale != 1.0) {
+        pt->x = (LONG)((double)pt->x / scale);
+        pt->y = (LONG)((double)pt->y / scale);
+    }
+}
+
+static void physical_to_logical_rect(RECT *r, double scale)
+{
+    if (scale > 0.0 && scale != 1.0) {
+        r->left   = (LONG)((double)r->left   / scale);
+        r->top    = (LONG)((double)r->top    / scale);
+        r->right  = (LONG)((double)r->right  / scale);
+        r->bottom = (LONG)((double)r->bottom / scale);
+    }
+}
+
+/* -------------------------------------------------------------------------- */
+/*  Notification area info with DPI awareness                                */
 /* -------------------------------------------------------------------------- */
 int tray_get_notification_icons_position(int *x, int *y)
 {
@@ -681,14 +733,23 @@ int tray_get_notification_icons_position(int *x, int *y)
     BOOL precise = get_tray_icon_rect(&r);   /* TRUE if modern API OK */
 
     if (precise) {
+        /* Get monitor for DPI scaling */
+        HMONITOR hMon = MonitorFromRect(&r, MONITOR_DEFAULTTOPRIMARY);
+        double dpiScale = get_dpi_scale_for_monitor(hMon);
+
+        /* Convert physical coordinates to logical coordinates */
+        physical_to_logical_rect(&r, dpiScale);
+
         /* Use the actual icon rectangle to compute a better anchor */
         int cx = (r.left + r.right) / 2;   /* center X of the icon */
         int cy = 0;                        /* anchor Y: bottom for top tray, top for bottom tray */
 
-        HMONITOR hMon = MonitorFromRect(&r, MONITOR_DEFAULTTOPRIMARY);
         MONITORINFO mi = {0};
         mi.cbSize = sizeof(mi);
         if (GetMonitorInfoW(hMon, &mi)) {
+            /* Convert monitor info to logical coordinates */
+            physical_to_logical_rect(&mi.rcMonitor, dpiScale);
+
             LONG midY = (mi.rcMonitor.bottom + mi.rcMonitor.top) / 2;
             /* If icon is on top half of monitor, anchor below it; otherwise above */
             cy = (r.top < midY) ? r.bottom : r.top;
@@ -707,6 +768,14 @@ int tray_get_notification_icons_position(int *x, int *y)
             *x = *y = 0;
             return 0;                        /* nothing reliable */
         }
+
+        /* Get DPI scale for this window's monitor */
+        HMONITOR hMon = MonitorFromWindow(hNotif, MONITOR_DEFAULTTOPRIMARY);
+        double dpiScale = get_dpi_scale_for_monitor(hMon);
+
+        /* Convert to logical coordinates */
+        physical_to_logical_rect(&r, dpiScale);
+
         *x = r.left;
         *y = r.top;
         return 0;                            /* not precise */
