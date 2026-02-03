@@ -459,7 +459,13 @@ int tray_init(struct tray *tray)
 
     ensure_critical_section();
 
-    tray_enable_dark_mode();
+    /* Wrap in SEH: tray_enable_dark_mode uses undocumented ordinal 135 of
+       uxtheme.dll which may cause an access violation on some Windows 10 builds. */
+    __try {
+        tray_enable_dark_mode();
+    } __except(EXCEPTION_EXECUTE_HANDLER) {
+        /* Silently ignore – dark-mode theming is cosmetic only. */
+    }
     wm_taskbarcreated = RegisterWindowMessageW(L"TaskbarCreated");
 
     // Register (ignore if the class already exists)
