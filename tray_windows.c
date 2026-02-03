@@ -459,7 +459,13 @@ int tray_init(struct tray *tray)
 
     ensure_critical_section();
 
-    tray_enable_dark_mode();
+    /* Wrap in SEH: tray_enable_dark_mode uses undocumented ordinal 135 of
+       uxtheme.dll which may cause an access violation on some Windows 10 builds. */
+    __try {
+        tray_enable_dark_mode();
+    } __except(EXCEPTION_EXECUTE_HANDLER) {
+        /* Silently ignore – dark-mode theming is cosmetic only. */
+    }
     wm_taskbarcreated = RegisterWindowMessageW(L"TaskbarCreated");
 
     // Register (ignore if the class already exists)
@@ -665,9 +671,16 @@ static BOOL get_tray_icon_rect(RECT *r)
     NIGetRect_t pGetRect = (NIGetRect_t)GetProcAddress(hShell, "Shell_NotifyIconGetRect");
     if (!pGetRect) return FALSE;               /* OS too old */
 
-    NOTIFYICONIDENTIFIER nii = { sizeof(nii) };
+    /* CRITICAL FIX: Properly zero-initialize the entire structure */
+    /* This ensures all fields including guidItem are zeroed */
+    NOTIFYICONIDENTIFIER nii;
+    ZeroMemory(&nii, sizeof(nii));
+    nii.cbSize = sizeof(nii);
     nii.hWnd = l_hwnd;        /* owner window */
     nii.uID  = l_uid;         /* id */
+
+    /* The guidItem field is now safely zeroed.
+     * When guidItem is zero (NULL GUID), Windows will use hWnd/uID for identification */
 
     return SUCCEEDED(pGetRect(&nii, r));
 }
@@ -677,6 +690,8 @@ static BOOL get_tray_icon_rect(RECT *r)
 /* -------------------------------------------------------------------------- */
 int tray_get_notification_icons_position(int *x, int *y)
 {
+    if (!x || !y) return 0;  /* Safety check for null pointers */
+
     RECT r = {0};
     BOOL precise = get_tray_icon_rect(&r);   /* TRUE if modern API OK */
 
