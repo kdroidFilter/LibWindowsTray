@@ -5,14 +5,21 @@ project(tray LANGUAGES C CXX)
 # Define the C++ standard
 set(CMAKE_CXX_STANDARD 17)
 
+# Use NATIVE_LIBS_OUTPUT_DIR env var if set, otherwise default to src/commonMain/resources
+if(DEFINED ENV{NATIVE_LIBS_OUTPUT_DIR})
+    set(BASE_OUTPUT_DIR "$ENV{NATIVE_LIBS_OUTPUT_DIR}")
+else()
+    set(BASE_OUTPUT_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../src/commonMain/resources")
+endif()
+
 # Check target architecture
 if(CMAKE_GENERATOR_PLATFORM STREQUAL "x64" OR CMAKE_GENERATOR_PLATFORM STREQUAL "")
     set(TARGET_ARCH "x64")
-    set(OUTPUT_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../src/commonMain/resources/win32-x86-64")
+    set(OUTPUT_DIR "${BASE_OUTPUT_DIR}/win32-x86-64")
     add_compile_options("/arch:AVX2")
 elseif(CMAKE_GENERATOR_PLATFORM STREQUAL "ARM64")
     set(TARGET_ARCH "ARM64")
-    set(OUTPUT_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../src/commonMain/resources/win32-arm64")
+    set(OUTPUT_DIR "${BASE_OUTPUT_DIR}/win32-arm64")
     add_compile_options("/arch:arm64")
 else()
     message(FATAL_ERROR "Unsupported architecture: ${CMAKE_GENERATOR_PLATFORM}")
